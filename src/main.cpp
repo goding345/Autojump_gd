@@ -31,8 +31,8 @@ class $modify(BotLayer, GJBaseGameLayer) {
 		f->built = true;
 	}
 
-	void processCommands(float dt) {
-		GJBaseGameLayer::processCommands(dt);
+	void processCommands(float dt, bool isHalfTick, bool isLastTick) {
+		GJBaseGameLayer::processCommands(dt, isHalfTick, isLastTick);
 
 		// работаем только внутри самого уровня
 		if (static_cast<GJBaseGameLayer*>(PlayLayer::get()) != this) return;
