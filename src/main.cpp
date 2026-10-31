@@ -116,7 +116,7 @@ class $modify(BotLayer, GJBaseGameLayer) {
 			}
 
 			f->obstacles.push_back(o);
-			f->maxW = std::max(f->maxW, r.size.width);
+			if (r.size.width < 400.f) f->maxW = std::max(f->maxW, r.size.width);
 		}
 		std::sort(f->obstacles.begin(), f->obstacles.end(),
 			[](Obstacle const& a, Obstacle const& b) { return a.x0 < b.x0; });
@@ -260,8 +260,8 @@ class $modify(BotLayer, GJBaseGameLayer) {
 	}
 
 	// ================= КУБ =================
-	// Моделируем прыжок куба по физике и ищем момент, когда прыжок
-	// проходит все шипы и блоки. Прыгаем в середине безопасного окна.
+	// Планируем прыжки по физике куба на ~0.9 сек вперёд (можно несколько
+	// прыжков подряд). Прыгаем в середине безопасного окна.
 	void cubeLogic(float dt) {
 		auto f = m_fields.self();
 
@@ -284,17 +284,18 @@ class $modify(BotLayer, GJBaseGameLayer) {
 		float py = m_player1->getPositionY();
 		float s = m_player1->m_isUpsideDown ? -1.f : 1.f;
 		float pyM = s * py;
-		float vx = speedUnits(m_player1->m_playerSpeed) / 60.f; // юнитов за "тик" (1/60 c)
+		float vx = speedUnits(m_player1->m_playerSpeed) / 60.f; // юнитов за тик (1/60 c)
 
 		constexpr float V0 = 11.180032f;
 		constexpr float G = 0.958199f;
-		constexpr float HS = 14.5f; // блоки
-		constexpr float HH = 10.f;  // шипы
+		constexpr float HS = 14.5f; // половина куба для блоков
+		constexpr float HH = 10.f;  // для шипов
+		constexpr int TH = 64;      // горизонт в тиках
 		constexpr int WMAX = 48;
 
-		// препятствия впереди (в зеркальных координатах, если гравитация перевёрнута)
+		// препятствия впереди (в зеркальных координатах при перевёрнутой гравитации)
 		f->window.clear();
-		float reach = vx * 75.f + 60.f;
+		float reach = vx * TH + 40.f;
 		auto it = std::lower_bound(f->obstacles.begin(), f->obstacles.end(),
 			px - f->maxW - 20.f,
 			[](Obstacle const& o, float v) { return o.x0 < v; });
@@ -305,7 +306,7 @@ class $modify(BotLayer, GJBaseGameLayer) {
 			float a = s * it->y0, b = s * it->y1;
 			m.y0 = std::min(a, b);
 			m.y1 = std::max(a, b);
-			if (m.y1 < pyM - 120.f || m.y0 > pyM + 150.f) continue;
+			if (m.y1 < pyM - 60.f || m.y0 > pyM + 110.f) continue;
 			f->window.push_back(m);
 		}
 		if (f->window.empty()) {
@@ -313,45 +314,86 @@ class $modify(BotLayer, GJBaseGameLayer) {
 			return;
 		}
 
-		auto survives = [&](float jumpAt) {
-			float x = px, y = pyM, vy = 0.f;
-			bool air = false;
-			const float h = 0.5f;
-			for (float t = 0.f; t < 72.f; t += h) {
-				if (!air && jumpAt >= 0.f && t >= jumpAt) {
-					air = true;
-					vy = V0;
+		// 1) едем по земле: где первое столкновение?
+		auto groundBad = [&](float x) {
+			for (auto const& o : f->window) {
+				bool haz = (o.kind == K_HAZARD);
+				float rr = haz ? HH : HS;
+				if (x > o.x0 - rr && x < o.x1 + rr && pyM > o.y0 - rr && pyM < o.y1 + rr) return true;
+			}
+			return false;
+		};
+		std::array<bool, TH + 1> runBad{};
+		int firstBad = TH;
+		for (int t = 0; t < TH; ++t) {
+			runBad[t] = groundBad(px + vx * (t + 0.5f)) || groundBad(px + vx * (t + 1.f));
+			if (runBad[t] && firstBad == TH) firstBad = t;
+		}
+		if (firstBad == TH) {
+			f->w0 = -1.f; // прыгать не нужно
+			return;
+		}
+
+		// 2) симуляция куба
+		struct Sim { float x, y, vy; bool air; bool onBlock; };
+		auto advance = [&](Sim& sm, float h) {
+			float prevY = sm.y;
+			if (sm.air) {
+				sm.vy -= G * h;
+				sm.y += sm.vy * h;
+				if (sm.y <= pyM && sm.vy <= 0.f) {
+					sm.y = pyM;
+					sm.vy = 0.f;
+					sm.air = false;
 				}
-				float prevY = y;
-				if (air) {
-					vy -= G * h;
-					y += vy * h;
-					if (y <= pyM && vy <= 0.f) {
-						y = pyM;
-						vy = 0.f;
-						air = false;
-					}
-				}
-				x += vx * h;
-				for (auto const& o : f->window) {
-					bool haz = (o.kind == K_HAZARD);
-					float rr = haz ? HH : HS;
-					if (!(x > o.x0 - rr && x < o.x1 + rr && y > o.y0 - rr && y < o.y1 + rr)) continue;
-					if (haz) return false;
-					if (vy <= 0.f && prevY - HS >= o.y1 - 8.f) {        // приземлились на блок
-						y = o.y1 + HS;
-						vy = 0.f;
-						air = false;
-					} else if (vy > 0.f && prevY + HS <= o.y0 + 8.f) {  // стукнулись головой
-						y = o.y0 - HS;
-						vy = 0.f;
-					} else {
-						return false;                                   // врезались боком
-					}
+			}
+			sm.x += vx * h;
+			for (auto const& o : f->window) {
+				bool haz = (o.kind == K_HAZARD);
+				float rr = haz ? HH : HS;
+				if (!(sm.x > o.x0 - rr && sm.x < o.x1 + rr && sm.y > o.y0 - rr && sm.y < o.y1 + rr)) continue;
+				if (haz) return false;
+				if (sm.vy <= 0.f && prevY - HS >= o.y1 - 8.f) {        // приземлились на блок
+					sm.y = o.y1 + HS;
+					sm.vy = 0.f;
+					sm.air = false;
+					sm.onBlock = true;
+				} else if (sm.vy > 0.f && prevY + HS <= o.y0 + 8.f) {  // стукнулись головой
+					sm.y = o.y0 - HS;
+					sm.vy = 0.f;
+				} else {
+					return false;                                      // врезались боком
 				}
 			}
 			return true;
 		};
+
+		// good[t]: стоя на земле в тик t можно дожить до горизонта
+		std::array<bool, TH + 1> good{};
+		std::array<bool, TH + 1> jumpOk{};
+		good[TH] = true;
+		for (int t0 = TH - 1; t0 >= 0; --t0) {
+			// прыжок в тик t0
+			bool ok = false;
+			Sim sm{px + vx * t0, pyM, V0, true, false};
+			bool dead = false;
+			bool done = false;
+			for (float tm = static_cast<float>(t0); tm < TH && !done; tm += 0.5f) {
+				if (!advance(sm, 0.5f)) { dead = true; break; }
+				if (sm.onBlock) { ok = true; done = true; break; }
+				if (!sm.air) {
+					float tl = tm + 0.5f;
+					int L = static_cast<int>(std::ceil(tl - 0.0001f));
+					if (L >= TH) { ok = true; done = true; break; }
+					bool partBad = (static_cast<float>(L) > tl + 0.0001f) && runBad[L - 1];
+					ok = !partBad && good[L];
+					done = true;
+				}
+			}
+			if (!dead && !done) ok = true; // долетели до горизонта в воздухе
+			jumpOk[t0] = ok;
+			good[t0] = ok || (!runBad[t0] && good[t0 + 1]);
+		}
 
 		auto doJump = [&]() {
 			this->handleButton(true, 1, true);
@@ -361,34 +403,19 @@ class $modify(BotLayer, GJBaseGameLayer) {
 			f->willMiss = false;
 		};
 
-		// если ехать прямо безопасно - ничего не делаем
-		if (survives(-1.f)) {
-			f->w0 = -1.f;
-			return;
-		}
-
-		// безопасное окно: сколько ещё тиков можно подождать до прыжка
+		// 3) окно безопасных моментов прыжка [0..b]
 		int b = -1;
-		if (survives(0.f)) {
+		if (jumpOk[0]) {
 			b = 0;
-			while (b < WMAX && survives(static_cast<float>(b + 1))) ++b;
+			while (b + 1 <= std::min(firstBad, WMAX) && jumpOk[b + 1]) ++b;
 		}
 
 		if (b < 0) {
-			// сейчас прыгать рано/поздно. Есть ли вообще безопасный момент позже?
-			bool any = false;
-			for (int w = 1; w <= WMAX && !any; ++w) any = survives(static_cast<float>(w));
 			f->w0 = -1.f;
-			if (!any) {
-				// аварийный вариант: прыгаем перед ближайшим препятствием на уровне куба
-				for (auto const& o : f->window) {
-					float d = o.x0 - px;
-					if (d > 0.f && d <= vx * 10.f && o.y1 > pyM - 10.f && o.y0 < pyM + 10.f) {
-						doJump();
-						return;
-					}
-				}
-			}
+			bool later = false;
+			for (int t = 1; t <= std::min(firstBad, WMAX) && !later; ++t) later = jumpOk[t];
+			// выхода нет вообще -> аварийно прыгаем перед ближайшим препятствием
+			if (!later && !good[0] && firstBad <= 10) doJump();
 			return;
 		}
 
