@@ -1,8 +1,8 @@
 {
 	"geode": "4.6.0",
 	"gd": {
-		"win": "2.2081",
-		"android": "2.2081"
+		"win": "*",
+		"android": "*"
 	},
 	"id": "user.autojump",
 	"name": "Auto Jump Bot",
