@@ -1,0 +1,28 @@
+{
+	"geode": "4.6.0",
+	"gd": {
+		"win": "2.2081",
+		"android": "2.2081"
+	},
+	"id": "user.autojump",
+	"name": "Auto Jump Bot",
+	"version": "v1.0.0",
+	"developer": "user",
+	"description": "Авто-прыжок через шипы с настройкой легитности (0-10).",
+	"settings": {
+		"enabled": {
+			"type": "bool",
+			"name": "Включен",
+			"default": true
+		},
+		"legit": {
+			"type": "int",
+			"name": "Легитность (0-10)",
+			"description": "0 = идеальные прыжки, сразу видно бота. 10 = часто ошибается и умирает.",
+			"default": 5,
+			"min": 0,
+			"max": 10,
+			"control": { "slider": true }
+		}
+	}
+}
