@@ -58,6 +58,17 @@ class $modify(BotLayer, GJBaseGameLayer) {
 		float slope = 1.f;
 		float upSign = 1.f;
 
+		// отладка
+		struct Dbg {
+			int mode = 0;
+			int firstBad = -1, b = -1;
+			float w0 = -1.f, thr = 0.f;
+			int dUp = -1, dDown = -1;
+			bool jumped = false, emergency = false;
+			float jx = 0.f, jy = 0.f;
+		} dbg;
+		bool deadLogged = false;
+
 		std::mt19937 rng{std::random_device{}()};
 	};
 
@@ -121,6 +132,27 @@ class $modify(BotLayer, GJBaseGameLayer) {
 		std::sort(f->obstacles.begin(), f->obstacles.end(),
 			[](Obstacle const& a, Obstacle const& b) { return a.x0 < b.x0; });
 		f->built = true;
+	}
+
+	void logDeath() {
+		auto f = m_fields.self();
+		float px = m_player1->getPositionX();
+		float py = m_player1->getPositionY();
+		auto const& d = f->dbg;
+		log::info("[AutoJump] DEAD mode={} pos=({:.1f},{:.1f}) ground={} speedMul={:.2f} legit={}",
+			d.mode, px, py, m_player1->m_isOnGround, m_player1->m_playerSpeed,
+			Mod::get()->getSettingValue<int64_t>("legit"));
+		log::info("[AutoJump] plan: firstBad={} b={} w0={:.1f} thr={:.1f} dUp={} dDown={} slope={:.2f} upSign={:.0f} jumped={} jumpAt=({:.1f},{:.1f}) emergency={}",
+			d.firstBad, d.b, d.w0, d.thr, d.dUp, d.dDown, f->slope, f->upSign,
+			d.jumped, d.jx, d.jy, d.emergency);
+		int n = 0;
+		for (auto const& o : f->obstacles) {
+			if (o.x1 < px - 60.f || o.x0 > px + 80.f) continue;
+			if (o.y1 < py - 80.f || o.y0 > py + 80.f) continue;
+			log::info("[AutoJump]   obstacle kind={} rect=({:.1f},{:.1f})-({:.1f},{:.1f})",
+				o.kind, o.x0, o.y0, o.x1, o.y1);
+			if (++n >= 10) break;
+		}
 	}
 
 	// ================= ВОЛНА =================
@@ -225,6 +257,9 @@ class $modify(BotLayer, GJBaseGameLayer) {
 			if (std::max(dUp, dDown) >= N) break;
 		}
 
+		f->dbg.mode = 2;
+		f->dbg.dUp = dUp;
+		f->dbg.dDown = dDown;
 		bool holdMeansUp = f->upSign > 0.f;
 		bool curUp = (f->waveHold == holdMeansUp);
 		bool goUp = curUp;
@@ -289,7 +324,7 @@ class $modify(BotLayer, GJBaseGameLayer) {
 		constexpr float V0 = 11.180032f;
 		constexpr float G = 0.958199f;
 		constexpr float HS = 14.5f; // половина куба для блоков
-		constexpr float HH = 10.f;  // для шипов
+		constexpr float HH = 15.5f; // для шипов (корпус куба 30x30)
 		constexpr int TH = 64;      // горизонт в тиках
 		constexpr int WMAX = 48;
 
@@ -395,7 +430,12 @@ class $modify(BotLayer, GJBaseGameLayer) {
 			good[t0] = ok || (!runBad[t0] && good[t0 + 1]);
 		}
 
+		f->dbg.mode = 1;
+		f->dbg.firstBad = firstBad;
 		auto doJump = [&]() {
+			f->dbg.jumped = true;
+			f->dbg.jx = px;
+			f->dbg.jy = py;
 			this->handleButton(true, 1, true);
 			f->holding = true;
 			f->releaseTimer = 0.06f;
@@ -410,12 +450,16 @@ class $modify(BotLayer, GJBaseGameLayer) {
 			while (b + 1 <= std::min(firstBad, WMAX) && jumpOk[b + 1]) ++b;
 		}
 
+		f->dbg.b = b;
 		if (b < 0) {
 			f->w0 = -1.f;
 			bool later = false;
 			for (int t = 1; t <= std::min(firstBad, WMAX) && !later; ++t) later = jumpOk[t];
 			// выхода нет вообще -> аварийно прыгаем перед ближайшим препятствием
-			if (!later && !good[0] && firstBad <= 10) doJump();
+			if (!later && !good[0] && firstBad <= 10) {
+				f->dbg.emergency = true;
+				doJump();
+			}
 			return;
 		}
 
@@ -433,6 +477,8 @@ class $modify(BotLayer, GJBaseGameLayer) {
 		if (f->willMiss) return;
 
 		float threshold = f->w0 * 0.5f + f->jitter;
+		f->dbg.w0 = f->w0;
+		f->dbg.thr = threshold;
 		if (static_cast<float>(b) <= threshold || b == 0) doJump();
 	}
 
@@ -441,9 +487,19 @@ class $modify(BotLayer, GJBaseGameLayer) {
 
 		if (static_cast<GJBaseGameLayer*>(PlayLayer::get()) != this) return;
 		if (!Mod::get()->getSettingValue<bool>("enabled")) return;
-		if (!m_player1 || m_player1->m_isDead) return;
+		if (!m_player1) return;
 
 		auto f = m_fields.self();
+		if (m_player1->m_isDead) {
+			if (!f->deadLogged && f->built) {
+				f->deadLogged = true;
+				this->logDeath();
+				f->dbg.jumped = false;
+				f->dbg.emergency = false;
+			}
+			return;
+		}
+		f->deadLogged = false;
 		if (!f->built) this->buildObjects();
 
 		if (m_player1->m_isDart) {
