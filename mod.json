@@ -6,20 +6,20 @@
 	},
 	"id": "user.autojump",
 	"name": "Auto Jump Bot",
-	"version": "v1.0.0",
+	"version": "v1.1.0",
 	"developer": "user",
-	"description": "Авто-прыжок через шипы с настройкой легитности (0-10).",
+	"description": "Auto bot for cube and wave with adjustable mistakes (0-10).",
 	"settings": {
 		"enabled": {
 			"type": "bool",
-			"name": "Включен",
+			"name": "Bot enabled",
 			"default": true
 		},
 		"legit": {
 			"type": "int",
-			"name": "Легитность (0-10)",
-			"description": "0 = идеальные прыжки, сразу видно бота. 10 = часто ошибается и умирает.",
-			"default": 5,
+			"name": "Mistakes level",
+			"description": "0 = perfect bot, 10 = human-like mistakes (late reactions, missed jumps).",
+			"default": 0,
 			"min": 0,
 			"max": 10,
 			"control": { "slider": true }
